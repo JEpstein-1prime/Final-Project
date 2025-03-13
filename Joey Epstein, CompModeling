@@ -38,6 +38,13 @@ column_names_pre <- c("1N...80", "2N...81", "3N...82", "4N...83", "5N...84", "6N
 existing_pre <- intersect(column_names_pre, colnames(DATAV_))
 existing_change <- intersect(column_names_change, colnames(DATAV_))
 
+# Ensure 'BeliefResistance' column exists and is numeric
+if (!"BeliefResistance" %in% colnames(DATAV_)) {
+  stop("Error: 'BeliefResistance' column not found in dataset!")
+}
+DATAV_$BeliefResistance <- as.numeric(DATAV_$BeliefResistance)
+
+
 # Convert necessary columns to numeric
 DATAV_ <- DATAV_ %>%
   mutate(across(all_of(existing_pre), as.numeric)) %>%
@@ -454,9 +461,6 @@ cat("Probability Negative Change (PRE >= 50):", probability_negative_change_pre_
 cat("Probability Positive Change (PRE < 50):", probability_positive_change_pre_below_50, "\n")
 cat("Probability Negative Change (PRE < 50):", probability_negative_change_pre_below_50, "\n")
 
-# Define belief classifications
-red_beliefs <- pre_values < 50  # Red dots
-blue_beliefs <- pre_values >= 50  # Blue dots
 
 # Define lattice structure
 graph_edges <- c("0t", "50t", "50t", "100t", "41.9", "0t", "62.7", "0t", 
@@ -658,12 +662,6 @@ compute_update_stats <- function(data, ranges) {
 
 
 #Heatmap of Assuredness and Rigidity plus Correlations
-
-# Ensure 'BeliefResistance' column exists and is numeric
-if (!"BeliefResistance" %in% colnames(DATAV_)) {
-  stop("Error: 'BeliefResistance' column not found in dataset!")
-}
-DATAV_$BeliefResistance <- as.numeric(DATAV_$BeliefResistance)
 
 
 # Filter only existing PRE columns from dataset
