@@ -12,24 +12,14 @@ library(lavaan)
 library(poLCA)
 library(MASS)
 library(e1071)  
+library(igraph)
 
-
-#XGBOOST Feature Importance (Group and Individual)
 
 # Load dataset
-DATAV_ <- read_csv("~/DataBeliefs /DATAV..csv", show_col_types = FALSE)
+dataset_path <- "~/DataBeliefs /DATAV..csv"
+DATAV_ <- read_csv(dataset_path, show_col_types = FALSE)
 
-# Extract rows >= 4
-row4_and_above_data <- DATAV_[4:nrow(DATAV_), , drop = FALSE]
-
-# Define column names for PRE and CHANGE
-column_names_pre <- c("1N...80", "2N...81", "3N...82", "4N...83", "5N...84", "6N...85",
-                      "7N...86", "8N...87", "9N...88", "10N...89", "11N...90", "12N...91",
-                      "1D...92", "2D...93", "3D...94", "4D...95", "5D...96", "6D...97",
-                      "7D...98", "8D...99", "9D...100", "10D...101", "11D...102", "12D...103",
-                      "1R...104", "2R...105", "3R...106", "4R...107", "5R...108", "6R...109",
-                      "7R...110", "8R...111", "9R...112", "10R...113", "11R...114", "12R...115")
-
+# Define column groups
 column_names_change <- c("1N...6", "2N...7", "3N...8", "4N...9", "5N...10", "6N...11",
                          "7N...12", "8N...13", "9N...14", "10N...15", "11N...16", "12N...17",
                          "1D...18", "2D...19", "3D...20", "4D...21", "5D...22", "6D...23",
@@ -37,16 +27,94 @@ column_names_change <- c("1N...6", "2N...7", "3N...8", "4N...9", "5N...10", "6N.
                          "1R...30", "2R...31", "3R...32", "4R...33", "5R...34", "6R...35",
                          "7R...36", "8R...37", "9R...38", "10R...39", "11R...40", "12R...41")
 
-# Extract valid columns
-valid_columns_pre <- intersect(colnames(row4_and_above_data), column_names_pre)
-valid_columns_change <- intersect(colnames(row4_and_above_data), column_names_change)
+column_names_pre <- c("1N...80", "2N...81", "3N...82", "4N...83", "5N...84", "6N...85",
+                      "7N...86", "8N...87", "9N...88", "10N...89", "11N...90", "12N...91",
+                      "1D...92", "2D...93", "3D...94", "4D...95", "5D...96", "6D...97",
+                      "7D...98", "8D...99", "9D...100", "10D...101", "11D...102", "12D...103",
+                      "1R...104", "2R...105", "3R...106", "4R...107", "5R...108", "6R...109",
+                      "7R...110", "8R...111", "9R...112", "10R...113", "11R...114", "12R...115")
 
-# Extract data without cleaning
-pre_data <- row4_and_above_data %>%
-  dplyr::select(dplyr::all_of(valid_columns_pre))
+# Ensure only existing columns are used
+existing_pre <- intersect(column_names_pre, colnames(DATAV_))
+existing_change <- intersect(column_names_change, colnames(DATAV_))
 
-change_data <- row4_and_above_data %>%
-  dplyr::select(dplyr::all_of(valid_columns_change))
+# Convert necessary columns to numeric
+DATAV_ <- DATAV_ %>%
+  mutate(across(all_of(existing_pre), as.numeric)) %>%
+  mutate(across(all_of(existing_change), as.numeric)) %>%
+  mutate(BeliefResistance = ifelse(BeliefResistance == 0, 1, as.numeric(BeliefResistance)))
+
+# Store model comparison results
+comparison_results <- list()
+plots <- list()
+
+# Iterate over each PRE column separately
+for (i in seq_along(existing_pre)) {
+  pre_col <- existing_pre[i]
+  change_col <- existing_change[i]
+  pred_col <- paste0("PREDICTED_CHANGE_", pre_col)
+
+  # Prepare training data
+  train_data <- DATAV_ %>%
+    select(all_of(pre_col), BeliefResistance, party, all_of(change_col)) %>%
+    drop_na()
+
+  # Prepare feature matrix and labels for XGBoost
+  x_train <- as.matrix(train_data %>% select(-all_of(change_col)))
+  y_train <- train_data[[change_col]]
+
+  # Train XGBoost model
+  xgb_model <- xgboost(
+    data = x_train,
+    label = y_train,
+    max_depth = 5,
+    eta = 0.1,
+    nrounds = 100,
+    objective = "reg:squarederror",
+    verbose = 0
+  )
+
+  # Generate XGBoost predictions
+  DATAV_[[pred_col]] <- predict(xgb_model, as.matrix(DATAV_ %>% select(all_of(pre_col), BeliefResistance, party)))
+
+  # Compute comparison statistics
+  correlation <- cor(DATAV_[[change_col]], DATAV_[[pred_col]], use = "complete.obs")
+  mae <- mean(abs(DATAV_[[change_col]] - DATAV_[[pred_col]]), na.rm = TRUE)
+  rmse <- sqrt(mean((DATAV_[[change_col]] - DATAV_[[pred_col]])^2, na.rm = TRUE))
+
+  # Store results
+  comparison_results[[pre_col]] <- data.frame(
+    PRE_Column = pre_col,
+    CHANGE_Column = change_col,
+    Correlation = round(correlation, 3),
+    MAE = round(mae, 3),
+    RMSE = round(rmse, 3)
+  )
+
+  # Generate scatter plot
+  p <- ggplot(DATAV_, aes(x = .data[[change_col]], y = .data[[pred_col]])) +
+    geom_point(alpha = 0.6, color = "blue") +
+    geom_smooth(method = "lm", color = "red", se = FALSE) +
+    labs(title = paste("Scatter: True vs. XGBoost Predicted Change for", pre_col),
+         x = "True Change",
+         y = "Predicted Change") +
+    theme_minimal()
+
+  plots[[pre_col]] <- p
+}
+
+# Print summary of all model comparisons
+comparison_df <- bind_rows(comparison_results)
+print(comparison_df)
+
+# Print all scatter plots
+for (p in plots) {
+  print(p)
+}
+
+
+#XGBOOST Feature Importance (Group and Individual)
+
 
 # Perform PCA
 pca_pre <- principal(pre_data, nfactors = 3, rotate = "varimax", scores = TRUE)
@@ -118,8 +186,6 @@ xgb.plot.importance(importance_change)
 
 #XGBoost Tree
 
-
-
 xgb_model <- xgboost(
   data = x_train,
   label = y_train,
@@ -132,50 +198,11 @@ xgb_model <- xgboost(
   verbose = 0
 )
 
-
-# Print feature importance
-importance_matrix <- xgb.importance(model = xgb_model)
-print(importance_matrix)
-
 # Visualize the tree structure
 xgb.plot.tree(model = xgb_model, trees = 0)  # Visualizes first tree
 
 
 #PCA
-
-
-# Load dataset
-DATAV_ <- read_csv("~/DataBeliefs /DATAV..csv", show_col_types = FALSE)
-
-# Extract rows >= 4
-row4_and_above_data <- DATAV_[4:nrow(DATAV_), , drop = FALSE]
-
-# Define column names for CHANGE and PRE
-column_names_change <- c("1N...6", "2N...7", "3N...8", "4N...9", "5N...10", "6N...11",
-                          "7N...12", "8N...13", "9N...14", "10N...15", "11N...16", "12N...17",
-                          "1D...18", "2D...19", "3D...20", "4D...21", "5D...22", "6D...23",
-                          "7D...24", "8D...25", "9D...26", "10D...27", "11D...28", "12D...29",
-                          "1R...30", "2R...31", "3R...32", "4R...33", "5R...34", "6R...35",
-                          "7R...36", "8R...37", "9R...38", "10R...39", "11R...40", "12R...41")
-
-column_names_pre <- c("1N...80", "2N...81", "3N...82", "4N...83", "5N...84", "6N...85",
-                       "7N...86", "8N...87", "9N...88", "10N...89", "11N...90", "12N...91",
-                       "1D...92", "2D...93", "3D...94", "4D...95", "5D...96", "6D...97",
-                       "7D...98", "8D...99", "9D...100", "10D...101", "11D...102", "12D...103",
-                       "1R...104", "2R...105", "3R...106", "4R...107", "5R...108", "6R...109",
-                       "7R...110", "8R...111", "9R...112", "10R...113", "11R...114", "12R...115")
-
-# Extract valid columns
-valid_columns_change <- column_names_change[column_names_change %in% colnames(row4_and_above_data)]
-valid_columns_pre <- column_names_pre[column_names_pre %in% colnames(row4_and_above_data)]
-
-# Subset dataset
-change_data <- row4_and_above_data[, valid_columns_change]
-pre_data <- row4_and_above_data[, valid_columns_pre]
-
-# Convert to numeric (handling missing values)
-change_data <- data.frame(lapply(change_data, as.numeric))
-pre_data <- data.frame(lapply(pre_data, as.numeric))
 
 # Perform PCA
 pca_pre <- principal(pre_data, nfactors = 3, rotate = "varimax")
@@ -225,16 +252,7 @@ print(p_scatter)
 
 
 
-
-
-
 # Latent Class Analysis
-
-# dataset
-DATAV_ <- read_csv("~/DataBeliefs /DATAV..csv", show_col_types = FALSE)
-
-# Extract belief change columns
-belief_change_data <- DATAV_[column_names_change]
 
 # Rename columns for LCA compatibility
 colnames(belief_change_data) <- paste0("V", seq_along(colnames(belief_change_data)))
@@ -333,37 +351,6 @@ print(tukey_abs_change)
 #LATTICE AVG Change, Logistic Prediction-Model Accuracy (63% predict update direction), Probability Change
 
 
-
-# Load necessary libraries
-library(readr)
-library(dplyr)
-library(igraph)
-
-# Load dataset
-DATAV_ <- read_csv("~/DataBeliefs /DATAV..csv", show_col_types = FALSE)
-
-# Define column names for CHANGE and PRE
-column_names_change <- c("1N...6", "2N...7", "3N...8", "4N...9", "5N...10", "6N...11",
-                         "7N...12", "8N...13", "9N...14", "10N...15", "11N...16", "12N...17",
-                         "1D...18", "2D...19", "3D...20", "4D...21", "5D...22", "6D...23",
-                         "7D...24", "8D...25", "9D...26", "10D...27", "11D...28", "12D...29",
-                         "1R...30", "2R...31", "3R...32", "4R...33", "5R...34", "6R...35",
-                         "7R...36", "8R...37", "9R...38", "10R...39", "11R...40", "12R...41")
-
-column_names_pre <- c("1N...80", "2N...81", "3N...82", "4N...83", "5N...84", "6N...85",
-                      "7N...86", "8N...87", "9N...88", "10N...89", "11N...90", "12N...91",
-                      "1D...92", "2D...93", "3D...94", "4D...95", "5D...96", "6D...97",
-                      "7D...98", "8D...99", "9D...100", "10D...101", "11D...102", "12D...103",
-                      "1R...104", "2R...105", "3R...106", "4R...107", "5R...108", "6R...109",
-                      "7R...110", "8R...111", "9R...112", "10R...113", "11R...114", "12R...115")
-
-# Extract all rows from row 4 onwards
-pre_values <- DATAV_[4:nrow(DATAV_), column_names_pre] %>% as.matrix() %>% as.numeric()
-change_values <- DATAV_[4:nrow(DATAV_), column_names_change] %>% as.matrix() %>% as.numeric()
-
-# Compute final positions
-final_positions <- pre_values + change_values
-
 # Compute categorized average changes
 avg_change_positive_pre_above_50 <- mean(change_values[pre_values > 50 & change_values > 0], na.rm = TRUE)
 avg_change_negative_pre_above_50 <- mean(change_values[pre_values > 50 & change_values < 0], na.rm = TRUE)
@@ -422,7 +409,6 @@ plot(final_positions, rep(1, length(final_positions)),
      col = ifelse(pre_values < 50, "red", "blue"), pch = 19,
      xlab = "Belief Position", ylab = "Lattice Level", main = "Final Positions")
 legend("topright", legend = c("Pre < 50", "Pre >= 50"), col = c("red", "blue"), pch = 19)
-
 
 
 # Define model function
@@ -508,20 +494,6 @@ cat("Percentage No Change (PRE < 50):", percent_no_change_pre_below_50, "%\n")
 
 
 
-# Load dataset
-dataset_path <- "~/DataBeliefs /DATAV..csv"
-DATAV_ <- read_csv(dataset_path, show_col_types = FALSE)
-
-# Define column groups
-column_names_pre <- paste0(rep(1:12, each = 3), rep(c("N", "D", "R"), times = 12), "...", 80:115)
-column_names_change <- paste0(rep(1:12, each = 3), rep(c("N", "D", "R"), times = 12), "...", 6:41)
-
-# Add subject identifier
-DATAV_ <- DATAV_ %>% mutate(subject = row_number())
-
-
-# Merge and clean data
-data_clean <- inner_join(pre_long, change_long, by = c("subject", "item")) %>% drop_na()
 
 # Function to compute statistical measures
 compute_stats <- function(data_range) {
@@ -693,13 +665,6 @@ if (!"BeliefResistance" %in% colnames(DATAV_)) {
 }
 DATAV_$BeliefResistance <- as.numeric(DATAV_$BeliefResistance)
 
-# Define correct PRE column names
-column_names_pre <- c("1N...80", "2N...81", "3N...82", "4N...83", "5N...84", "6N...85",
-                      "7N...86", "8N...87", "9N...88", "10N...89", "11N...90", "12N...91",
-                      "1D...92", "2D...93", "3D...94", "4D...95", "5D...96", "6D...97",
-                      "7D...98", "8D...99", "9D...100", "10D...101", "11D...102", "12D...103",
-                      "1R...104", "2R...105", "3R...106", "4R...107", "5R...108", "6R...109",
-                      "7R...110", "8R...111", "9R...112", "10R...113", "11R...114", "12R...115")
 
 # Filter only existing PRE columns from dataset
 valid_pre_columns <- column_names_pre[column_names_pre %in% colnames(DATAV_)]
