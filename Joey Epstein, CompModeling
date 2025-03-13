@@ -1,0 +1,886 @@
+
+library(ggplot2)
+library(reshape2)
+library(factoextra)
+library(psych)
+library(readr)
+library(dplyr)
+library(xgboost)
+library(caret)
+library(tidyverse)
+library(lavaan)
+library(poLCA)
+library(MASS)
+library(e1071)  
+
+
+#XGBOOST Feature Importance (Group and Individual)
+
+# Load dataset
+DATAV_ <- read_csv("~/DataBeliefs /DATAV..csv", show_col_types = FALSE)
+
+# Extract rows >= 4
+row4_and_above_data <- DATAV_[4:nrow(DATAV_), , drop = FALSE]
+
+# Define column names for PRE and CHANGE
+column_names_pre <- c("1N...80", "2N...81", "3N...82", "4N...83", "5N...84", "6N...85",
+                      "7N...86", "8N...87", "9N...88", "10N...89", "11N...90", "12N...91",
+                      "1D...92", "2D...93", "3D...94", "4D...95", "5D...96", "6D...97",
+                      "7D...98", "8D...99", "9D...100", "10D...101", "11D...102", "12D...103",
+                      "1R...104", "2R...105", "3R...106", "4R...107", "5R...108", "6R...109",
+                      "7R...110", "8R...111", "9R...112", "10R...113", "11R...114", "12R...115")
+
+column_names_change <- c("1N...6", "2N...7", "3N...8", "4N...9", "5N...10", "6N...11",
+                         "7N...12", "8N...13", "9N...14", "10N...15", "11N...16", "12N...17",
+                         "1D...18", "2D...19", "3D...20", "4D...21", "5D...22", "6D...23",
+                         "7D...24", "8D...25", "9D...26", "10D...27", "11D...28", "12D...29",
+                         "1R...30", "2R...31", "3R...32", "4R...33", "5R...34", "6R...35",
+                         "7R...36", "8R...37", "9R...38", "10R...39", "11R...40", "12R...41")
+
+# Extract valid columns
+valid_columns_pre <- intersect(colnames(row4_and_above_data), column_names_pre)
+valid_columns_change <- intersect(colnames(row4_and_above_data), column_names_change)
+
+# Extract data without cleaning
+pre_data <- row4_and_above_data %>%
+  dplyr::select(dplyr::all_of(valid_columns_pre))
+
+change_data <- row4_and_above_data %>%
+  dplyr::select(dplyr::all_of(valid_columns_change))
+
+# Perform PCA
+pca_pre <- principal(pre_data, nfactors = 3, rotate = "varimax", scores = TRUE)
+pca_change <- principal(change_data, nfactors = 3, rotate = "varimax", scores = TRUE)
+
+# Ensure scores exist before assignment
+if (!is.null(pca_pre$scores)) {
+  row4_and_above_data$RC1_PRE <- pca_pre$scores[, 1]
+} else {
+  stop("PCA for pre_data failed to generate scores.")
+}
+
+if (!is.null(pca_change$scores)) {
+  row4_and_above_data$RC1_CHANGE <- pca_change$scores[, 1]
+} else {
+  stop("PCA for change_data failed to generate scores.")
+}
+
+# Define predictor variables
+features_pre <- c("BeliefResistance", "party", "PartyStrength")
+features_change <- c("BeliefResistance", "party", "PartyStrength", "RC1_PRE")
+
+# Ensure required columns exist before selection
+available_columns_pre <- intersect(colnames(row4_and_above_data), c(features_pre, "RC1_PRE"))
+available_columns_change <- intersect(colnames(row4_and_above_data), c(features_change, "RC1_CHANGE"))
+
+# Extract features for XGBoost
+X_pre <- as.matrix(row4_and_above_data %>%
+  dplyr::select(dplyr::all_of(features_pre)))
+y_pre <- as.numeric(row4_and_above_data$RC1_PRE)
+
+X_change <- as.matrix(row4_and_above_data %>%
+  dplyr::select(dplyr::all_of(features_change)))
+y_change <- as.numeric(row4_and_above_data$RC1_CHANGE)
+
+# Convert data into XGBoost matrix format
+dtrain_pre <- xgb.DMatrix(data = X_pre, label = y_pre)
+dtrain_change <- xgb.DMatrix(data = X_change, label = y_change)
+
+# Train XGBoost models
+params <- list(
+  objective = "reg:squarederror", 
+  eval_metric = "rmse", 
+  eta = 0.1, 
+  max_depth = 6, 
+  subsample = 0.8, 
+  colsample_bytree = 0.8
+)
+
+xgb_model_pre <- xgboost(data = dtrain_pre, params = params, nrounds = 100, verbose = 0)
+xgb_model_change <- xgboost(data = dtrain_change, params = params, nrounds = 100, verbose = 0)
+
+# Extract feature importance
+importance_pre <- xgb.importance(feature_names = features_pre, model = xgb_model_pre)
+importance_change <- xgb.importance(feature_names = features_change, model = xgb_model_change)
+
+# Print feature importance
+print("Feature importance for predicting RC1_PRE")
+print(importance_pre)
+
+print("Feature importance for predicting RC1_CHANGE")
+print(importance_change)
+
+# Plot feature importance
+xgb.plot.importance(importance_pre)
+xgb.plot.importance(importance_change)
+
+
+
+#XGBoost Tree
+
+
+
+xgb_model <- xgboost(
+  data = x_train,
+  label = y_train,
+  max_depth = 7,    # Increase tree depth
+  eta = 0.05,       # Reduce learning rate
+  nrounds = 300,    # Train for more iterations
+  subsample = 0.8,  # Prevent overfitting
+  colsample_bytree = 0.8,
+  objective = "reg:squarederror",
+  verbose = 0
+)
+
+
+# Print feature importance
+importance_matrix <- xgb.importance(model = xgb_model)
+print(importance_matrix)
+
+# Visualize the tree structure
+xgb.plot.tree(model = xgb_model, trees = 0)  # Visualizes first tree
+
+
+#PCA
+
+
+# Load dataset
+DATAV_ <- read_csv("~/DataBeliefs /DATAV..csv", show_col_types = FALSE)
+
+# Extract rows >= 4
+row4_and_above_data <- DATAV_[4:nrow(DATAV_), , drop = FALSE]
+
+# Define column names for CHANGE and PRE
+column_names_change <- c("1N...6", "2N...7", "3N...8", "4N...9", "5N...10", "6N...11",
+                          "7N...12", "8N...13", "9N...14", "10N...15", "11N...16", "12N...17",
+                          "1D...18", "2D...19", "3D...20", "4D...21", "5D...22", "6D...23",
+                          "7D...24", "8D...25", "9D...26", "10D...27", "11D...28", "12D...29",
+                          "1R...30", "2R...31", "3R...32", "4R...33", "5R...34", "6R...35",
+                          "7R...36", "8R...37", "9R...38", "10R...39", "11R...40", "12R...41")
+
+column_names_pre <- c("1N...80", "2N...81", "3N...82", "4N...83", "5N...84", "6N...85",
+                       "7N...86", "8N...87", "9N...88", "10N...89", "11N...90", "12N...91",
+                       "1D...92", "2D...93", "3D...94", "4D...95", "5D...96", "6D...97",
+                       "7D...98", "8D...99", "9D...100", "10D...101", "11D...102", "12D...103",
+                       "1R...104", "2R...105", "3R...106", "4R...107", "5R...108", "6R...109",
+                       "7R...110", "8R...111", "9R...112", "10R...113", "11R...114", "12R...115")
+
+# Extract valid columns
+valid_columns_change <- column_names_change[column_names_change %in% colnames(row4_and_above_data)]
+valid_columns_pre <- column_names_pre[column_names_pre %in% colnames(row4_and_above_data)]
+
+# Subset dataset
+change_data <- row4_and_above_data[, valid_columns_change]
+pre_data <- row4_and_above_data[, valid_columns_pre]
+
+# Convert to numeric (handling missing values)
+change_data <- data.frame(lapply(change_data, as.numeric))
+pre_data <- data.frame(lapply(pre_data, as.numeric))
+
+# Perform PCA
+pca_pre <- principal(pre_data, nfactors = 3, rotate = "varimax")
+pca_change <- principal(change_data, nfactors = 3, rotate = "varimax")
+
+# Extract loadings and add belief dimensions as a column
+df_pre_pca <- as.data.frame(unclass(pca_pre$loadings))
+df_pre_pca$Belief_Dimension <- rownames(df_pre_pca)
+
+df_change_pca <- as.data.frame(unclass(pca_change$loadings))
+df_change_pca$Belief_Dimension <- rownames(df_change_pca)
+
+# Reshape for Heatmaps
+df_pre_melt <- melt(df_pre_pca, id.vars = "Belief_Dimension")
+df_change_melt <- melt(df_change_pca, id.vars = "Belief_Dimension")
+
+# Function to create heatmap
+plot_heatmap <- function(df, title) {
+  ggplot(df, aes(x = variable, y = Belief_Dimension, fill = value)) +
+    geom_tile() +
+    geom_text(aes(label = round(value, 2)), size = 4) +
+    scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0) +
+    labs(title = title, x = "Principal Components", y = "Belief Dimensions") +
+    theme_minimal()
+}
+
+# Plot Heatmaps for PRE and CHANGE
+p1 <- plot_heatmap(df_pre_melt, "PCA Loadings for PRE (Latent Belief Clusters)")
+p2 <- plot_heatmap(df_change_melt, "PCA Loadings for CHANGE (Latent Update Clusters)")
+
+print(p1)
+print(p2)
+
+
+# ------ PCA Scatter Plot Comparing PRE vs. CHANGE ------
+pca_data <- data.frame(PC1 = df_pre_pca$RC1, PC2 = df_pre_pca$RC2, Type = "PRE")
+pca_data <- rbind(pca_data, data.frame(PC1 = df_change_pca$RC1, PC2 = df_change_pca$RC2, Type = "CHANGE"))
+
+p_scatter <- ggplot(pca_data, aes(x = PC1, y = PC2, color = Type)) +
+  geom_point(size = 4, alpha = 0.7) +
+  labs(title = "PCA Projection: PRE vs. CHANGE", x = "PC1", y = "PC2") +
+  theme_minimal()
+
+print(p_scatter)
+
+
+
+
+
+
+
+
+# Latent Class Analysis
+
+# dataset
+DATAV_ <- read_csv("~/DataBeliefs /DATAV..csv", show_col_types = FALSE)
+
+# Extract belief change columns
+belief_change_data <- DATAV_[column_names_change]
+
+# Rename columns for LCA compatibility
+colnames(belief_change_data) <- paste0("V", seq_along(colnames(belief_change_data)))
+
+# Convert belief change scores into categorical bins (Low, Moderate, High)
+belief_change_data_cat <- belief_change_data %>%
+  mutate(across(everything(), ~ cut(.x, breaks = 3, labels = c(1, 2, 3), include.lowest = TRUE))) %>%
+  mutate(across(everything(), as.numeric))  # Convert factors to numeric
+
+# Fit LCA model
+set.seed(123)  # Ensuring reproducibility
+f <- as.formula(paste("cbind(", paste(colnames(belief_change_data_cat), collapse=", "), ") ~ 1"))
+lca_model <- poLCA(f, data = belief_change_data_cat, nclass = 4, maxiter = 5000)
+
+# Assign latent class membership
+DATAV_$Latent_Class <- factor(lca_model$predclass, levels = 1:4, labels = c("Class 1", "Class 2", "Class 3", "Class 4"))
+
+# Define color palette
+class_colors <- c("Class 1" = "#7B3294", "Class 2" = "#008837", "Class 3" = "#E66101", "Class 4" = "#0571B0")
+
+# Plot Class Membership Distribution
+ggplot(DATAV_, aes(x = Latent_Class, fill = Latent_Class)) +
+  geom_bar() +
+  scale_fill_manual(values = class_colors) +
+  labs(title = "Distribution of Latent Classes", x = "Latent Class", y = "Count") +
+  theme_minimal()
+
+# Compute Absolute Belief Change per Class
+DATAV_$Abs_Change <- rowMeans(abs(DATAV_[column_names_change]), na.rm = TRUE)
+
+change_summary <- DATAV_ %>%
+  group_by(Latent_Class) %>%
+  summarize(Mean_Abs_Change = mean(Abs_Change, na.rm = TRUE),
+            SD_Abs_Change = sd(Abs_Change, na.rm = TRUE),
+            Count = n())
+
+print("Mean Absolute Belief Change per Class:")
+print(change_summary)
+
+#  Boxplot of Absolute Belief Change by Class
+ggplot(DATAV_, aes(x = Latent_Class, y = Abs_Change, fill = Latent_Class)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = class_colors) +
+  labs(title = "Comparison of Absolute Belief Change Across Latent Classes",
+       x = "Latent Class",
+       y = "Absolute Belief Change") +
+  theme_minimal()
+
+# Histogram of Mean PRE Values by Class
+DATAV_$Mean_PRE <- rowMeans(DATAV_[column_names_pre], na.rm = TRUE)
+
+ggplot(DATAV_, aes(x = Mean_PRE, fill = Latent_Class)) +
+  geom_histogram(binwidth = 5, position = "fill", alpha = 0.8) +
+  scale_fill_manual(values = class_colors) +
+  labs(title = "Proportion of Latent Classes Across Mean PRE Values",
+       x = "Mean PRE Value",
+       y = "Proportion") +
+  theme_minimal()
+
+#  ANOVA Test: Do Mean PRE Values Differ by Latent Class?
+anova_model <- aov(Mean_PRE ~ Latent_Class, data = DATAV_)
+anova_result <- summary(anova_model)
+
+print("ANOVA Test Results for Mean PRE:")
+print(anova_result)
+
+#  Tukey Post-Hoc Test (if ANOVA is significant)
+tukey_result <- TukeyHSD(anova_model)
+print("Tukey Post-Hoc Test Results for Mean PRE:")
+print(tukey_result)
+
+# Boxplot of PRE Values by Latent Class
+ggplot(DATAV_, aes(x = Latent_Class, y = Mean_PRE, fill = Latent_Class)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = class_colors) +
+  labs(title = "Comparison of Mean PRE Values by Latent Class",
+       x = "Latent Class",
+       y = "Mean PRE Value") +
+  theme_minimal()
+
+# ANOVA Test: Do Absolute Belief Changes Differ by Class?
+anova_abs_change <- aov(Abs_Change ~ Latent_Class, data = DATAV_)
+anova_abs_result <- summary(anova_abs_change)
+
+print("ANOVA Test Results for Absolute Belief Change:")
+print(anova_abs_result)
+
+# Tukey Post-Hoc Test for Absolute Belief Change
+tukey_abs_change <- TukeyHSD(anova_abs_change)
+print("Tukey Post-Hoc Test Results for Absolute Belief Change:")
+print(tukey_abs_change)
+
+
+
+
+#LATTICE AVG Change, Logistic Prediction-Model Accuracy (63% predict update direction), Probability Change
+
+
+
+# Load necessary libraries
+library(readr)
+library(dplyr)
+library(igraph)
+
+# Load dataset
+DATAV_ <- read_csv("~/DataBeliefs /DATAV..csv", show_col_types = FALSE)
+
+# Define column names for CHANGE and PRE
+column_names_change <- c("1N...6", "2N...7", "3N...8", "4N...9", "5N...10", "6N...11",
+                         "7N...12", "8N...13", "9N...14", "10N...15", "11N...16", "12N...17",
+                         "1D...18", "2D...19", "3D...20", "4D...21", "5D...22", "6D...23",
+                         "7D...24", "8D...25", "9D...26", "10D...27", "11D...28", "12D...29",
+                         "1R...30", "2R...31", "3R...32", "4R...33", "5R...34", "6R...35",
+                         "7R...36", "8R...37", "9R...38", "10R...39", "11R...40", "12R...41")
+
+column_names_pre <- c("1N...80", "2N...81", "3N...82", "4N...83", "5N...84", "6N...85",
+                      "7N...86", "8N...87", "9N...88", "10N...89", "11N...90", "12N...91",
+                      "1D...92", "2D...93", "3D...94", "4D...95", "5D...96", "6D...97",
+                      "7D...98", "8D...99", "9D...100", "10D...101", "11D...102", "12D...103",
+                      "1R...104", "2R...105", "3R...106", "4R...107", "5R...108", "6R...109",
+                      "7R...110", "8R...111", "9R...112", "10R...113", "11R...114", "12R...115")
+
+# Extract all rows from row 4 onwards
+pre_values <- DATAV_[4:nrow(DATAV_), column_names_pre] %>% as.matrix() %>% as.numeric()
+change_values <- DATAV_[4:nrow(DATAV_), column_names_change] %>% as.matrix() %>% as.numeric()
+
+# Compute final positions
+final_positions <- pre_values + change_values
+
+# Compute categorized average changes
+avg_change_positive_pre_above_50 <- mean(change_values[pre_values > 50 & change_values > 0], na.rm = TRUE)
+avg_change_negative_pre_above_50 <- mean(change_values[pre_values > 50 & change_values < 0], na.rm = TRUE)
+
+avg_change_positive_pre_below_50 <- mean(change_values[pre_values < 50 & change_values > 0], na.rm = TRUE)
+avg_change_negative_pre_below_50 <- mean(change_values[pre_values < 50 & change_values < 0], na.rm = TRUE)
+
+# Print results
+cat("Average Positive Change (PRE > 50):", avg_change_positive_pre_above_50, "\n")
+cat("Average Negative Change (PRE > 50):", avg_change_negative_pre_above_50, "\n")
+cat("Average Positive Change (PRE < 50):", avg_change_positive_pre_below_50, "\n")
+cat("Average Negative Change (PRE < 50):", avg_change_negative_pre_below_50, "\n")
+
+# Define belief classifications
+red_beliefs <- final_positions[pre_values < 50]  # Red dots
+blue_beliefs <- final_positions[pre_values >= 50]  # Blue dots
+
+# Compute average final positions
+avg_red_final <- mean(red_beliefs, na.rm = TRUE)
+avg_blue_final <- mean(blue_beliefs, na.rm = TRUE)
+
+cat("Average Final Position (Red, PRE < 50):", avg_red_final, "\n")
+cat("Average Final Position (Blue, PRE >= 50):", avg_blue_final, "\n")
+
+# Define the lattice structure
+nodes <- c("0t", "50t", "100t", "41.9", "62.7")
+edges <- c("0t", "50t", "50t", "100t", "41.9", "0t", "62.7", "0t",
+           "41.9", "50t", "62.7", "50t", "41.9", "100t", "62.7", "100t")
+
+# Create graph object
+lattice_graph <- graph(edges = edges, directed = FALSE)
+
+# Define edge labels
+edge_labels <- c(" | ", " | ", " 36.94 ", "-15.62 ", " ∆+ ", "∆− ", " 14.93 ", "-35.2")
+
+# Assign labels to edges
+E(lattice_graph)$label <- edge_labels
+
+# Define the layout
+layout_matrix <- matrix(c(0, 0, 0, 1, 0, 2, -1, 1, 1, 1), ncol = 2, byrow = TRUE)
+
+# Plot lattice structure
+plot(lattice_graph,
+     layout = layout_matrix,
+     vertex.size = 30,
+     vertex.label.color = "black",
+     vertex.color = "lightblue",
+     edge.width = 2,
+     edge.label = E(lattice_graph)$label,
+     edge.label.color = "black",
+     edge.label.cex = 1.5,
+     main = "All Participants' (1,777) Average Belief Transition Graph")
+
+# Plot final positions on lattice
+plot(final_positions, rep(1, length(final_positions)), 
+     col = ifelse(pre_values < 50, "red", "blue"), pch = 19,
+     xlab = "Belief Position", ylab = "Lattice Level", main = "Final Positions")
+legend("topright", legend = c("Pre < 50", "Pre >= 50"), col = c("red", "blue"), pch = 19)
+
+
+
+# Define model function
+logistic_model <- function(PRE, lambda) {
+  return(1 / (1 + exp((PRE - 50) / lambda)))
+}
+
+# Set lambda (assuming a fixed lambda value for testing, can iterate over 1 to 10)
+lambda <- 5
+
+# Compute probabilities
+P_C_plus <- logistic_model(PRE, lambda)
+P_C_minus <- 1 - P_C_plus
+
+# Predicted class: if P_C_plus > 0.5, predict C+, else C-
+predicted_class <- ifelse(P_C_plus > 0.5, 1, 0)
+
+# Actual class (assuming CHANGE is binary: 1 for C+, 0 for C-)
+actual_class <- ifelse(CHANGE > 0, 1, 0)
+
+# Compute accuracy
+accuracy <- sum(predicted_class == actual_class) / length(actual_class)
+
+# Print results
+print(paste("Model Accuracy:", accuracy * 100, "%"))
+
+# Check if 100% accuracy
+if (accuracy == 1) {
+  print("The model is 100% accurate!")
+} else {
+  print("The model is NOT 100% accurate.")
+}
+
+# Compute probability of direction change
+probability_positive_change_pre_above_50 <- mean(change_values[pre_values >= 50] > 0, na.rm = TRUE)
+probability_negative_change_pre_above_50 <- mean(change_values[pre_values >= 50] < 0, na.rm = TRUE)
+probability_positive_change_pre_below_50 <- mean(change_values[pre_values < 50] > 0, na.rm = TRUE)
+probability_negative_change_pre_below_50 <- mean(change_values[pre_values < 50] < 0, na.rm = TRUE)
+
+# Print results
+cat("Probability Positive Change (PRE >= 50):", probability_positive_change_pre_above_50, "\n")
+cat("Probability Negative Change (PRE >= 50):", probability_negative_change_pre_above_50, "\n")
+cat("Probability Positive Change (PRE < 50):", probability_positive_change_pre_below_50, "\n")
+cat("Probability Negative Change (PRE < 50):", probability_negative_change_pre_below_50, "\n")
+
+# Define belief classifications
+red_beliefs <- pre_values < 50  # Red dots
+blue_beliefs <- pre_values >= 50  # Blue dots
+
+# Define lattice structure
+graph_edges <- c("0t", "50t", "50t", "100t", "41.9", "0t", "62.7", "0t", 
+                 "41.9", "50t", "62.7", "50t", "41.9", "100t", "62.7", "100t")
+edge_labels <- c(" | ", " | ", " .61 ", ".33", " ∆+ ", "∆− ", " .35", ".56")
+
+# Create graph
+g <- graph(edges = graph_edges, directed = FALSE)
+E(g)$label <- edge_labels
+layout_matrix <- matrix(c(0, 0, 0, 1, 0, 2, -1, 1, 1, 1), ncol = 2, byrow = TRUE)
+
+# Plot lattice structure
+plot(g, layout = layout_matrix, vertex.size = 30, vertex.label.color = "black", 
+     vertex.color = "lightblue", edge.width = 2, edge.label = E(g)$label, 
+     edge.label.color = "black", edge.label.cex = 1.5,
+     main = "All Participants' Mean (1,777) Probability of Belief Transition Given PRE")
+
+# Plot final positions
+plot(pre_values, rep(1, length(pre_values)), 
+     col = ifelse(pre_values < 50, "red", "blue"), pch = 19,
+     xlab = "Belief Position", ylab = "Lattice Level", main = "Initial Positions")
+legend("topright", legend = c("Pre < 50", "Pre >= 50"), col = c("red", "blue"), pch = 19)
+
+# Compute percentage of no change
+percent_no_change_pre_above_50 <- mean(change_values[pre_values >= 50] == 0, na.rm = TRUE) * 100
+percent_no_change_pre_below_50 <- mean(change_values[pre_values < 50] == 0, na.rm = TRUE) * 100
+
+# Print results
+cat("Percentage No Change (PRE >= 50):", percent_no_change_pre_above_50, "%\n")
+cat("Percentage No Change (PRE < 50):", percent_no_change_pre_below_50, "%\n")
+
+
+
+#odds ratio (direction given initial belief)
+
+
+
+# Load dataset
+dataset_path <- "~/DataBeliefs /DATAV..csv"
+DATAV_ <- read_csv(dataset_path, show_col_types = FALSE)
+
+# Define column groups
+column_names_pre <- paste0(rep(1:12, each = 3), rep(c("N", "D", "R"), times = 12), "...", 80:115)
+column_names_change <- paste0(rep(1:12, each = 3), rep(c("N", "D", "R"), times = 12), "...", 6:41)
+
+# Add subject identifier
+DATAV_ <- DATAV_ %>% mutate(subject = row_number())
+
+
+# Merge and clean data
+data_clean <- inner_join(pre_long, change_long, by = c("subject", "item")) %>% drop_na()
+
+# Function to compute statistical measures
+compute_stats <- function(data_range) {
+  if (nrow(data_range) == 0) return(NULL)
+  
+  Q1 <- quantile(data_range$Change, 0.25, na.rm = TRUE)
+  Q3 <- quantile(data_range$Change, 0.75, na.rm = TRUE)
+  IQR_val <- Q3 - Q1
+  outliers <- data_range %>% filter(Change < (Q1 - 1.5 * IQR_val) | Change > (Q3 + 1.5 * IQR_val)) %>% pull(Change)
+  model <- lm(Change ~ PRE, data = data_range)
+  
+  list(
+    median = median(data_range$Change, na.rm = TRUE),
+    IQR = IQR_val,
+    skewness = skewness(data_range$Change, na.rm = TRUE),
+    spread = sd(data_range$Change, na.rm = TRUE),
+    symmetry = (median(data_range$Change, na.rm = TRUE) - Q1) / (Q3 - median(data_range$Change, na.rm = TRUE)),
+    beta_coefficient = coef(model)[2],
+    p_value = summary(model)$coefficients[2, 4],
+    outliers = outliers
+  )
+}
+
+# Compute measures for each range
+ranges <- list(c(0, 25), c(25, 50), c(50, 75), c(75, 100))
+measures_list <- lapply(ranges, function(range) compute_stats(data_clean %>% filter(PRE > range[1] & PRE <= range[2])))
+
+# Display results
+for (i in seq_along(ranges)) {
+  cat("\nMeasures for", ranges[[i]][1], "< PRE <=", ranges[[i]][2], ":\n")
+  print(measures_list[[i]])
+}
+
+# Compute probability of update and magnitude
+compute_update_stats <- function(data, ranges) {
+  results <- data.frame(PRE_Range = character(), Probability_Update = numeric(), Avg_Magnitude_Update = numeric(), stringsAsFactors = FALSE)
+  
+  for (range in ranges) {
+    data_range <- data %>% filter(PRE > range[1] & PRE <= range[2])
+    results <- rbind(results, data.frame(
+      PRE_Range = paste0(range[1], " < PRE ≤ ", range[2]),
+      Probability_Update = mean(data_range$Change != 0, na.rm = TRUE),
+      Avg_Magnitude_Update = mean(abs(data_range$Change[data_range$Change != 0]), na.rm = TRUE)
+    ))
+  }
+  results
+}
+
+# Compute update statistics and print results
+update_stats <- compute_update_stats(data_clean, ranges)
+print(update_stats)
+
+# Compute probability of upward and downward revision
+compute_direction_prob <- function(data, ranges) {
+  results <- data.frame(PRE_Range = character(), P_Plus = numeric(), P_Minus = numeric(), Odds_Ratio = numeric(), stringsAsFactors = FALSE)
+  
+  for (range in ranges) {
+    data_range <- data %>% filter(PRE > range[1] & PRE <= range[2])
+    P_plus <- mean(data_range$Change > 0, na.rm = TRUE)
+    P_minus <- mean(data_range$Change < 0, na.rm = TRUE)
+    odds_ratio <- ifelse(P_minus > 0, P_plus / P_minus, NA)
+    
+    results <- rbind(results, data.frame(
+      PRE_Range = paste0(range[1], " < PRE ≤ ", range[2]),
+      P_Plus = P_plus,
+      P_Minus = P_minus,
+      Odds_Ratio = odds_ratio
+    ))
+  }
+  results
+}
+
+# Compute and print direction probabilities
+direction_probs <- compute_direction_prob(data_clean, ranges)
+print(direction_probs)
+
+
+
+#Boxplots
+
+
+# Function to calculate summary statistics
+summary_statistics <- function(data) {
+  if (nrow(data) == 0) return(NULL)
+  
+  stats <- data %>% summarise(
+    median = median(Change, na.rm = TRUE),
+    IQR = IQR(Change, na.rm = TRUE),
+    min = min(Change, na.rm = TRUE),
+    max = max(Change, na.rm = TRUE),
+    skewness = skewness(Change, na.rm = TRUE),
+    spread = sd(Change, na.rm = TRUE),
+    symmetry = (median(Change, na.rm = TRUE) - quantile(Change, 0.25, na.rm = TRUE)) / (quantile(Change, 0.75, na.rm = TRUE) - median(Change, na.rm = TRUE))
+  )
+  
+  model <- lm(Change ~ PRE, data = data)
+  stats$beta_coefficient <- coef(model)[2]
+  stats$p_value <- summary(model)$coefficients[2, 4]
+  return(stats)
+}
+
+# Define PRE ranges and compute statistics
+ranges <- list(c(0, 25), c(25, 50), c(50, 75), c(75, 100))
+stats_list <- lapply(ranges, function(range) {
+  data_range <- data_clean %>% filter(PRE > range[1] & PRE <= range[2])
+  summary_statistics(data_range)
+})
+
+# Print summary statistics
+for (i in seq_along(ranges)) {
+  cat("\nSummary Statistics for PRE in range", ranges[[i]][1], "-", ranges[[i]][2], "\n")
+  print(stats_list[[i]])
+}
+
+# Ensure NA values are removed before categorization
+data_clean <- data_clean %>% filter(!is.na(PRE), !is.na(Change))
+
+# Categorize PRE without NA values
+data_clean$PRE_category <- cut(data_clean$PRE, 
+                               breaks = c(0, 25, 50, 75, 100), 
+                               labels = c("0-25", "26-50", "51-75", "76-100"), 
+                               include.lowest = TRUE)
+
+# Ensure NA values are dropped from categorization
+data_clean <- data_clean %>% filter(!is.na(PRE_category))
+
+# Visualization
+ggplot(data_clean, aes(x = PRE_category, y = Change)) +
+  geom_boxplot(fill = "lightgray", alpha = 0.5, outlier.color = "red") +
+  labs(title = "Belief Update by Initial Belief Range", x = "Initial Belief (PRE)", y = "Change in Belief") +
+  theme_minimal()
+# Function to compute probability of update and average magnitude
+compute_update_stats <- function(data, ranges) {
+  results <- data.frame(PRE_Range = character(), 
+                        Probability_Update = numeric(), 
+                        Avg_Magnitude_Update = numeric(),
+                        stringsAsFactors = FALSE)
+  
+  for (range in ranges) {
+    data_range <- data %>% filter(PRE > range[1] & PRE <= range[2])
+
+
+ # Probability of update (Change ≠ 0)
+    prob_update <- mean(data_range$Change != 0, na.rm = TRUE)
+    
+    # Average magnitude of update when Change ≠ 0
+    avg_magnitude <- mean(abs(data_range$Change[data_range$Change != 0]), na.rm = TRUE)
+    
+    # Store results
+    results <- rbind(results, data.frame(
+      PRE_Range = paste0(range[1], " < PRE ≤ ", range[2]),
+      Probability_Update = prob_update,
+      Avg_Magnitude_Update = avg_magnitude
+    ))
+  }
+  
+
+    # Store results
+    results <- rbind
+
+
+
+
+#Heatmap of Assuredness and Rigidity plus Correlations
+
+# Ensure 'BeliefResistance' column exists and is numeric
+if (!"BeliefResistance" %in% colnames(DATAV_)) {
+  stop("Error: 'BeliefResistance' column not found in dataset!")
+}
+DATAV_$BeliefResistance <- as.numeric(DATAV_$BeliefResistance)
+
+# Define correct PRE column names
+column_names_pre <- c("1N...80", "2N...81", "3N...82", "4N...83", "5N...84", "6N...85",
+                      "7N...86", "8N...87", "9N...88", "10N...89", "11N...90", "12N...91",
+                      "1D...92", "2D...93", "3D...94", "4D...95", "5D...96", "6D...97",
+                      "7D...98", "8D...99", "9D...100", "10D...101", "11D...102", "12D...103",
+                      "1R...104", "2R...105", "3R...106", "4R...107", "5R...108", "6R...109",
+                      "7R...110", "8R...111", "9R...112", "10R...113", "11R...114", "12R...115")
+
+# Filter only existing PRE columns from dataset
+valid_pre_columns <- column_names_pre[column_names_pre %in% colnames(DATAV_)]
+
+# Ensure selected columns exist
+if (length(valid_pre_columns) == 0) {
+  stop("Error: No valid PRE columns found in the dataset!")
+}
+
+# Convert valid PRE columns to numeric
+DATAV_[valid_pre_columns] <- lapply(DATAV_[valid_pre_columns], as.numeric)
+
+# Remove columns with all NA or constant values (since they cause correlation errors)
+valid_pre_columns <- valid_pre_columns[sapply(DATAV_[valid_pre_columns], function(x) length(unique(na.omit(x))) > 1)]
+
+# Ensure there are still valid columns left
+if (length(valid_pre_columns) == 0) {
+  stop("Error: All selected PRE columns contain only NA or constant values, no correlation can be computed.")
+}
+
+# Compute correlation between BeliefResistance and each PRE column
+correlations_belief_pre <- sapply(valid_pre_columns, function(col) {
+  cor(DATAV_$BeliefResistance, DATAV_[[col]], use = "complete.obs")
+})
+
+# Compute correlation matrix for PRE columns
+if (length(valid_pre_columns) > 1) {
+  cor_matrix_pre <- cor(DATAV_[valid_pre_columns], use = "complete.obs")
+} else {
+  cor_matrix_pre <- NULL
+}
+
+# Compute correlation matrix for PRE columns
+if (length(valid_pre_columns) > 1) {
+  cor_matrix_pre <- cor(DATAV_[valid_pre_columns], use = "complete.obs")
+
+  # Convert correlation matrix to long format for heatmap
+  cor_matrix_melted <- melt(cor_matrix_pre)
+
+  # Create heatmap using ggplot2
+  heatmap_plot <- ggplot(cor_matrix_melted, aes(Var1, Var2, fill = value)) +
+    geom_tile() +
+    scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, limit = c(-1,1)) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    labs(title = "Heatmap of Correlation Matrix for PRE Variables",
+         x = "PRE Variables",
+         y = "PRE Variables",
+         fill = "Correlation")
+
+  print(heatmap_plot)
+
+} else {
+  cor_matrix_pre <- NULL
+  print("Not enough valid PRE variables to compute a correlation matrix.")
+}
+
+# Output results
+print("Correlation between BeliefResistance and PRE variables:")
+print(correlations_belief_pre)
+
+if (!is.null(cor_matrix_pre)) {
+  print("Correlation matrix for PRE variables:")
+  print(cor_matrix_pre)
+}
+
+
+#    Sigmoid Results
+
+
+
+# Normalize CHANGE to fit sigmoid range (0,1)
+df$CHANGE <- (df$CHANGE - min(df$CHANGE)) / (max(df$CHANGE) - min(df$CHANGE))
+
+# Define the logistic function
+sigmoid <- function(x, k, x0) {
+  return(1 / (1 + exp(-k * (x - x0))))
+}
+
+# Define the first derivative S'(x)
+sigmoid_prime <- function(x, k, x0) {
+  S_x <- sigmoid(x, k, x0)
+  return(k * S_x * (1 - S_x))
+}
+
+# Define the second derivative S''(x)
+sigmoid_double_prime <- function(x, k, x0) {
+  S_x <- sigmoid(x, k, x0)
+  return(k^2 * S_x * (1 - S_x) * (1 - 2 * S_x))
+}
+
+# Fit the logistic function to data
+fit <- nls(CHANGE ~ sigmoid(PRE, k, x0), 
+           data = df, 
+           start = list(k = 1, x0 = 50),  
+           algorithm = "port",
+           lower = c(0.1, 48),  
+           upper = c(5, 52))  
+
+
+
+# Extract estimated parameters
+params <- coef(fit)
+k_est <- params["k"]
+x0_est <- params["x0"]
+
+cat("\nEstimated Parameters:\n")
+cat("k =", k_est, "\n")
+cat("x0 =", x0_est, "\n")
+
+# Verify if x0 is close to 50
+if (abs(x0_est - 50) < 1) {
+  cat("\nConfirmed: The estimated inflection point x0 ≈ 50\n")
+} else {
+  cat("\nWarning: The estimated x0 differs significantly from 50. Further verification needed.\n")
+}
+
+# Compute second derivative at x = 50
+S_double_prime_50 <- sigmoid_double_prime(50, k_est, x0_est)
+cat("\nComputed S''(50) from data:", S_double_prime_50, "\n")
+
+# Verify if second derivative is close to zero
+if (abs(S_double_prime_50) < 1e-4) {
+  cat("Confirmed: S''(50) ≈ 0, validating x0 as an inflection point.\n")
+} else {
+  cat("S''(50) is not close to zero, indicating a different inflection point.\n")
+}
+
+# Generate data for visualization
+x_values <- seq(min(df$PRE), max(df$PRE), length.out = 100)
+s_values <- sigmoid(x_values, k_est, x0_est)
+first_derivatives <- sigmoid_prime(x_values, k_est, x0_est)
+second_derivatives <- sigmoid_double_prime(x_values, k_est, x0_est)
+
+data_plot <- data.frame(x = x_values, S = s_values, S_prime = first_derivatives, S_double_prime = second_derivatives)
+
+# Plot sigmoid function
+p1 <- ggplot(data_plot, aes(x = x)) +
+  geom_line(aes(y = S), color = "blue", size = 1) +
+  labs(title = "Sigmoid Function", y = "S(x)", x = "x") +
+  theme_minimal()
+
+# Plot first derivative
+p2 <- ggplot(data_plot, aes(x = x)) +
+  geom_line(aes(y = S_prime), color = "red", size = 1) +
+  labs(title = "First Derivative of Sigmoid", y = "S'(x)", x = "x") +
+  theme_minimal()
+
+# Plot second derivative
+p3 <- ggplot(data_plot, aes(x = x)) +
+  geom_line(aes(y = S_double_prime), color = "green", size = 1) +
+  labs(title = "Second Derivative of Sigmoid", y = "S''(x)", x = "x") +
+  theme_minimal()
+
+ggplot(df, aes(x = PRE)) +
+  geom_histogram(bins = 50, fill = "blue", alpha = 0.5) +
+  labs(title = "Distribution of PRE Values")
+
+
+# Display plots
+print(p1)
+print(p2)
+print(p3)
+
+# Taylor Expansion Approximation
+# Compute first derivative at x=50
+S_prime_50 <- sigmoid_prime(50, k_est, x0_est)
+
+# Define Taylor approximation of S(x) around x=50
+taylor_approx <- function(x) {
+  return(0.5 + S_prime_50 * (x - 50))
+}
+
+# Compute Taylor series approximation values
+data_plot$S_taylor <- taylor_approx(data_plot$x)
+
+# Plot comparison between original sigmoid and Taylor approximation
+p4 <- ggplot(data_plot, aes(x = x)) +
+  geom_line(aes(y = S), color = "blue", size = 1, linetype = "solid") +
+  geom_line(aes(y = S_taylor), color = "purple", size = 1, linetype = "dashed") +
+  labs(title = "Sigmoid vs. Taylor Expansion", y = "S(x)", x = "x") +
+  theme_minimal()
+
+print(p4)
