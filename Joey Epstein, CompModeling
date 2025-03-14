@@ -19,6 +19,29 @@ library(igraph)
 dataset_path <- "~/DataBeliefs /DATAV..csv"
 DATAV_ <- read_csv(dataset_path, show_col_types = FALSE)
 
+print("Dataset Information:")
+print(str(DATAV_))  # Structure of dataset
+
+print("Missing Values Per Column:")
+print(colSums(is.na(DATAV_)))  # Count missing values
+
+print("Number of Unique Values in Categorical Columns:")
+categorical_cols <- names(DATAV_)[sapply(DATAV_, is.character)]
+if (length(categorical_cols) > 0) {
+  print(DATAV_ %>% summarise(across(all_of(categorical_cols), n_distinct)))
+}
+
+# --- DESCRIPTIVE STATISTICS ---
+
+summary_stats <- DATAV_ %>%
+  summarise(across(where(is.numeric), list(
+    Mean = mean, Median = median, SD = sd, Variance = var,
+    Min = min, Max = max, IQR = IQR), na.rm = TRUE))
+
+print("Basic Descriptive Statistics:")
+print(summary_stats)
+
+
 # Define column groups
 column_names_change <- c("1N...6", "2N...7", "3N...8", "4N...9", "5N...10", "6N...11",
                          "7N...12", "8N...13", "9N...14", "10N...15", "11N...16", "12N...17",
